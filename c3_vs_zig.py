@@ -27,8 +27,6 @@ if not os.path.isfile(ZIG):
 	print(cmd)
 	subprocess.check_call(cmd.split())
 
-ZIG_VER = subprocess.check_output([ZIG, 'version']).decode('utf-8')
-print('zig version:', ZIG_VER)
 
 if not os.path.isfile(C3):
 	C3 = '/opt/c3/c3c'
@@ -62,7 +60,12 @@ assert os.path.isfile(C3)
 print('c3c:', C3)
 
 
-def zig_compile(zig, name='test-zig', freestanding=True):
+def zig_compile(zig, name='test-zig', freestanding=True, info={}):
+	ver = subprocess.check_output([ZIG, 'version']).decode('utf-8').strip()
+	print('zig version:', ver)
+	info['zig'] = ver
+
+
 	tmp = '/tmp/%s.zig' % name
 	open(tmp,'w').write(zig)
 
@@ -82,7 +85,22 @@ def zig_compile(zig, name='test-zig', freestanding=True):
 
 	return '/tmp/%s.wasm' % name
 
-def c3_compile(c3, name='test-c3'):
+
+def c3_version(c3):
+	ver = subprocess.check_output([c3, '--version']).decode('utf-8')
+	#print('c3 version:', ver)
+	v = ''
+	for ln in ver.splitlines():
+		if ln.startswith('C3 Compiler Version:'):
+			print(ln)
+			v += ln.split('C3 Compiler Version:')[-1].split('(')[0].strip()
+		elif ln.startswith('LLVM version:'):
+			v += ' LLVM=' + ln.split('LLVM version:')[-1].strip()
+	return v
+
+
+def c3_compile(c3, name='test-c3', info={}):
+	info['c3']=c3_version(C3)
 	tmp = '/tmp/%s.c3' % name
 	open(tmp,'w').write(c3)
 	cmd = [
@@ -100,7 +118,18 @@ def c3_compile(c3, name='test-c3'):
 	subprocess.check_call(cmd)
 	return '/tmp/%s.wasm' % name
 
-def c_compile(c, name='test-c'):
+def emcc_version(emcc):
+	ver = subprocess.check_output([emcc, '--version']).decode('utf-8')
+	ver = ver.splitlines()[0]
+	assert ver.startswith('emcc')
+	if ver.endswith('()'):
+		ver = ver[:-2].strip()
+	print(ver)
+	ver = ver.split()[-1]
+	return ver
+
+def c_compile(c, name='test-c', info={}):
+	info['c'] = emcc_version(EMCC)
 	tmp = '/tmp/%s.c' % name
 	open(tmp,'w').write(c)
 	output = '/tmp/%s.wasm32' % name
@@ -113,6 +142,7 @@ def c_compile(c, name='test-c'):
 	]
 	print(cmd)
 	subprocess.check_call(cmd)
+	return '/tmp/%s.wasm' % name
 
 
 
@@ -146,18 +176,20 @@ def run_tests():
 	for name in TESTS:
 		print('test:', name)
 		t = TESTS[name]
+		info = {}
+		wasms = {}
 		if 'zig' in t:
-			wasm = zig_compile(t['zig'])
-			print(wasm)
+			wasm = zig_compile(t['zig'], info=info)
+			wasms['zig']=wasm
 		if 'c3' in t:
-			wasm = c3_compile(t['c3'])
-			print(wasm)
+			wasm = c3_compile(t['c3'], info=info)
+			wasms['c3']=wasm
 		if 'c' in t:
-			wasm = c_compile(t['c'])
-			print(wasm)
-
-
-	os.system('ls -l /tmp/*.wasm')
+			wasm = c_compile(t['c'], info=info)
+			wasms['c']=wasm
+	
+		os.system('ls -l %s' % ' '.join(wasms.values()))
+		print(info)
 
 
 if __name__=='__main__':
