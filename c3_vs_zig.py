@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 import os, sys, subprocess
+import matplotlib.pyplot as plt
+
 _thisdir = os.path.split(os.path.abspath(__file__))[0]
 
 ZIG = os.path.join(_thisdir, 'zig-linux-x86_64-0.13.0/zig')
@@ -94,8 +96,8 @@ def c3_version(c3):
 		if ln.startswith('C3 Compiler Version:'):
 			print(ln)
 			v += ln.split('C3 Compiler Version:')[-1].split('(')[0].strip()
-		elif ln.startswith('LLVM version:'):
-			v += ' LLVM=' + ln.split('LLVM version:')[-1].strip()
+		#elif ln.startswith('LLVM version:'):
+		#	v += ' LLVM=' + ln.split('LLVM version:')[-1].strip()
 	return v
 
 
@@ -190,6 +192,21 @@ def run_tests():
 	
 		os.system('ls -l %s' % ' '.join(wasms.values()))
 		print(info)
+		names = []
+		for k in wasms:
+			if k=='c':
+				names.append('%s %s' %('emcc', info[k]))
+			else:
+				names.append('%s %s' %(k, info[k]))
+
+		values = [len(open(f,'rb').read()) for f in wasms.values()]
+		fig, ax = plt.subplots()
+		ax.set_title(name)
+		ax.set_ylabel('wasm: bytes')
+		colors = ['red', 'orange', 'pink']
+		ax.bar(names, values, color=colors)
+
+		plt.show()
 
 
 if __name__=='__main__':
