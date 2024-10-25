@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import os, sys, subprocess, base64, webbrowser
 import matplotlib.pyplot as plt
+from random import random
 
 _thisdir = os.path.split(os.path.abspath(__file__))[0]
 
@@ -147,7 +148,7 @@ def c_compile(c, name='test-c', info={}):
 	subprocess.check_call(cmd)
 	return '/tmp/%s.wasm' % name
 
-
+rand_floats = [str(random()) for i in range(1024)]
 
 TESTS = {
 	'helloworld':{
@@ -200,7 +201,7 @@ printn(ptr, len){
 	},
 
 	## test 2 ##
-	'embed float32 data' : {
+	'embed float32 array 8' : {
 		'zig':'''
 extern fn print_array(
 	ptr: [*]const f32, 
@@ -256,6 +257,69 @@ var arr = [
 console.log(arr);
 		'''
 
+	},
+
+	## test 3 ##
+	'embed float32 array %s' % len(rand_floats) : {
+		'zig':'''
+extern fn print_array(
+	ptr: [*]const f32, 
+	len:c_int
+	) void;
+
+const arr : [%s]f32 = .{%s};
+
+export fn main() void {
+	print_array(&arr, %s);
+}
+		''' % (len(rand_floats), ','.join(rand_floats), len(rand_floats)),
+
+		'c3':'''
+extern fn void print_array(
+	float *ptr, 
+	int len
+	);
+
+float[%s] arr = {%s};
+
+fn void main() 
+	@extern("main") 
+	@wasm {
+	print_array(&arr, %s);
+}
+		''' % (len(rand_floats), ','.join(rand_floats), len(rand_floats)),
+	},
+
+
+	## test 4 ##
+	'embed float16 array %s' % len(rand_floats) : {
+		'zig':'''
+extern fn print_array(
+	ptr: [*]const f16, 
+	len:c_int
+	) void;
+
+const arr : [%s]f16 = .{%s};
+
+export fn main() void {
+	print_array(&arr, %s);
+}
+		''' % (len(rand_floats), ','.join(rand_floats), len(rand_floats)),
+
+		'c3':'''
+extern fn void print_array(
+	float16 *ptr, 
+	int len
+	);
+
+float16[%s] arr = {%s};
+
+fn void main() 
+	@extern("main") 
+	@wasm {
+	print_array(&arr, %s);
+}
+		''' % (len(rand_floats), ','.join(rand_floats), len(rand_floats)),
 	}
 
 
@@ -403,14 +467,17 @@ def run_tests():
 			y = rect.get_y() + (rect.get_height()/3)
 			txt = overlays[i].strip().replace('\t', '  ')
 			if txt:
-				lines = txt.splitlines()
-				if len(lines) <= 32:
-					ax.text(x, y, txt+'\n', fontsize=12)
-				else:
-					ax.text(x, y, txt+'\n', fontsize=5)
-
+				tx = []
+				for ln in txt.splitlines():
+					if len(ln) > 50:
+						ln = ln[:45] + '...'
+					tx.append(ln)
+				txt = '\n'.join(tx)
+				ax.text(x, y, txt+'\n', fontsize=12)
 
 		plt.show()
+		if '--test-hello' in sys.argv:
+			break
 
 
 
