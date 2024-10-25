@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import os, sys, subprocess
+import os, sys, subprocess, base64, webbrowser
 import matplotlib.pyplot as plt
 
 _thisdir = os.path.split(os.path.abspath(__file__))[0]
@@ -139,6 +139,7 @@ def c_compile(c, name='test-c', info={}):
 		EMCC, '-o', output, 
 		"-s","WASM=1",
 		'-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0',
+		'-rdynamic',
 		'-Oz',
 		tmp
 	]
@@ -151,28 +152,171 @@ def c_compile(c, name='test-c', info={}):
 TESTS = {
 	'helloworld':{
 		'zig': '''
-extern fn printn( ptr: [*]const u8, len:c_int) void;
+extern fn printn(
+	ptr: [*]const u8, 
+	len:c_int
+	) void;
+
 export fn main() void {
 	printn("hello world", 11);
 }
 		''',
 		'c3':'''
-extern fn void printn(char *ptr, int len);
-fn void main(){
+extern fn void printn(
+	char *ptr, 
+	int len
+	);
+
+fn void main() 
+	@extern("main") 
+	@wasm {
 	printn("hello world", 11);
 }
 		''',
+
 		'c':'''
-extern void printn(char *ptr, int len);
+extern void printn(
+	char *ptr, 
+	int len
+	);
+
 void main(){
 	printn("hello world", 11);
 }
 		''',
+
+		'js':'''
+console.log("hello world");
+		''',
+
+		'JS':'''
+printn(ptr, len){
+	const b=new Uint8Array(this.wasm.instance.exports.memory.buffer,ptr,len);
+	window.alert(new TextDecoder().decode(b));
+}
+		'''
+
+
+	},
+
+	## test 2 ##
+	'embed float32 data' : {
+		'zig':'''
+extern fn print_array(
+	ptr: [*]const f32, 
+	len:c_int
+	) void;
+
+const arr : [8]f32 = .{
+	1.0,2.0,3.0,4.0,
+	5.0,6.0,7.0,8.0};
+
+export fn main() void {
+	print_array(&arr, 8);
+}
+		''',
+
+		'c3':'''
+extern fn void print_array(
+	float *ptr, 
+	int len
+	);
+
+float[8] arr = {
+	1.0,2.0,3.0,4.0,
+	5.0,6.0,7.0,8.0};
+
+fn void main() 
+	@extern("main") 
+	@wasm {
+	print_array(&arr, 8);
+}
+		''',
+
+		'c':'''
+extern void print_array(
+	float *ptr, 
+	int len
+	);
+
+float arr[8] = {
+	1.0,2.0,3.0,4.0,
+	5.0,6.0,7.0,8.0};
+
+void main() {
+	print_array(&arr, 8);
+}
+		''',
+
+		'js':'''
+var arr = [
+	1.0,2.0,3.0,4.0,
+	5.0,6.0,7.0,8.0];
+
+console.log(arr);
+		'''
+
 	}
 
 
 }
 
+
+JS_API = '''
+function make_environment(e){
+	return new Proxy(e,{
+		get(t,p,r) {
+			if(e[p]!==undefined){return e[p].bind(e)}
+			return(...args)=>{throw p}
+		}
+	});
+}
+class api{
+	proxy(){
+		return make_environment(this)
+	}
+	reset(wasm){
+		this.wasm=wasm;
+		this.wasm.instance.exports.main();
+	}
+
+
+'''
+
+JS_DECOMP = '''
+var $d=async(u,t)=>{
+	var d=new DecompressionStream('gzip')
+	var r=await fetch('data:application/octet-stream;base64,'+u)
+	var b=await r.blob()
+	var s=b.stream().pipeThrough(d)
+	var o=await new Response(s).blob()
+	if(t) return await o.text()
+	else return await o.arrayBuffer()
+}
+$d($wasm).then((r)=>{
+	WebAssembly.instantiate(r,{env:$.proxy()}).then((c)=>{$.reset(c)});
+});
+'''
+
+
+
+def gen_js_api(wasm, methods):
+	cmd = ['gzip', '--keep', '--force', '--verbose', '--best', wasm]
+	print(cmd)
+	subprocess.check_call(cmd)
+	wa = open(wasm,'rb').read()
+	w = open(wasm+'.gz','rb').read()
+	b = base64.b64encode(w).decode('utf-8')
+
+	js = [
+		JS_API,
+		methods,
+		'};',
+		'$=new api();',
+		'var $wasm="%s";' % b,
+		JS_DECOMP,
+	]
+	return '\n'.join(js)
 
 def run_tests():
 	for name in TESTS:
@@ -180,33 +324,110 @@ def run_tests():
 		t = TESTS[name]
 		info = {}
 		wasms = {}
+		overlays = []
 		if 'zig' in t:
 			wasm = zig_compile(t['zig'], info=info)
 			wasms['zig']=wasm
+			overlays.append(t['zig'])
+
+			if os.path.isfile('/usr/bin/wasm-opt'):
+				opt = wasm.replace('.wasm', '.opt.wasm')
+				cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
+				print(cmd)
+				subprocess.check_call(cmd)
+				overlays.append(None)
+				wasms['zig.wasm-opt'] = opt
+
+			if 'JS' in t and '--test' in sys.argv:
+				test_wasm(wasm, t['JS'], title='zig - %s' % name)
+
+
 		if 'c3' in t:
 			wasm = c3_compile(t['c3'], info=info)
 			wasms['c3']=wasm
-		if 'c' in t:
+			overlays.append(t['c3'])
+
+			if os.path.isfile('/usr/bin/wasm-opt'):
+				opt = wasm.replace('.wasm', '.opt.wasm')
+				cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
+				print(cmd)
+				subprocess.check_call(cmd)
+				overlays.append(None)
+				wasms['c3.wasm-opt'] = opt
+
+
+			if 'JS' in t and '--test' in sys.argv:
+				test_wasm(wasm, t['JS'], title='c3 - %s' % name)
+
+
+		if 'c' in t and '--c' in sys.argv:
 			wasm = c_compile(t['c'], info=info)
 			wasms['c']=wasm
+			overlays.append(t['c'])
+			if 'JS' in t and '--test-todo' in sys.argv:
+				## TODO: Uncaught (in promise) TypeError: import object field 'a' is not an Object 
+				test_wasm(wasm, t['JS'], title='c - %s' % name)
+
+		if 'js' in t and '--js' in sys.argv:
+			tmp = '/tmp/%s.js' % name
+			open(tmp,'w').write(t['js'])
+			wasms['javascript'] = tmp
+			overlays.append(t['js'])
+
 	
 		os.system('ls -l %s' % ' '.join(wasms.values()))
 		print(info)
 		names = []
 		for k in wasms:
-			if k=='c':
-				names.append('%s %s' %('emcc', info[k]))
+			if k in info:
+				if k=='c':
+					names.append('%s %s' %('emcc', info[k]))
+				else:
+					names.append('%s %s' %(k, info[k]))
 			else:
-				names.append('%s %s' %(k, info[k]))
+				names.append(k)
 
 		values = [len(open(f,'rb').read()) for f in wasms.values()]
 		fig, ax = plt.subplots()
 		ax.set_title(name)
 		ax.set_ylabel('wasm: bytes')
-		colors = ['red', 'orange', 'pink']
+		colors = ['cyan', 'cyan', 'orange', 'orange']
 		ax.bar(names, values, color=colors)
 
+		for i,rect in enumerate(ax.patches):
+			x = rect.get_x()
+			ax.text(x, rect.get_height(), '%s bytes' % values[i], fontsize=10)
+
+			if not overlays[i]:
+				continue
+			y = rect.get_y() + (rect.get_height()/3)
+			txt = overlays[i].strip().replace('\t', '  ')
+			if txt:
+				lines = txt.splitlines()
+				if len(lines) <= 32:
+					ax.text(x, y, txt+'\n', fontsize=12)
+				else:
+					ax.text(x, y, txt+'\n', fontsize=5)
+
+
 		plt.show()
+
+
+
+def test_wasm(wasm, methods, title='test'):
+	o = [
+		'<html>',
+		'<body>',
+		'<h2>%s</h2>' % title,
+		'<script>',
+		gen_js_api(wasm, methods),
+		'</script>',
+		'</body>',
+		'</html>',
+	]
+	out = '%s.html' % title
+	open(out,'w').write('\n'.join(o))
+	webbrowser.open(out)
 
 
 if __name__=='__main__':
