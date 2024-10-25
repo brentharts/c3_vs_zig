@@ -85,8 +85,9 @@ def zig_compile(zig, name='test-zig', freestanding=True, info={}):
 	]
 	print(cmd)
 	subprocess.check_call(cmd, cwd='/tmp')
-
-	return '/tmp/%s.wasm' % name
+	wasm = '/tmp/%s.wasm' % name
+	print(open(wasm,'rb').read())
+	return wasm
 
 
 def c3_version(c3):
@@ -100,6 +101,17 @@ def c3_version(c3):
 		#elif ln.startswith('LLVM version:'):
 		#	v += ' LLVM=' + ln.split('LLVM version:')[-1].strip()
 	return v
+
+
+def c3_wasm_strip(wasm):
+	#a = b'.rodata\x00,\x0ftarget_features\x02+\x0fmutable-globals+\x08sign-ext' # wasm-opt: parse exception: Section extends beyond end of input
+	a = b'\x00,\x0ftarget_features\x02+\x0fmutable-globals+\x08sign-ext'
+	b = open(wasm,'rb').read()
+	print(b)
+	assert b.endswith(a)
+	c = b[:-len(a)]
+	print(c)
+	open(wasm,'wb').write(c)
 
 
 def c3_compile(c3, name='test-c3', info={}):
@@ -119,7 +131,10 @@ def c3_compile(c3, name='test-c3', info={}):
 	]
 	print(cmd)
 	subprocess.check_call(cmd)
-	return '/tmp/%s.wasm' % name
+	wasm = '/tmp/%s.wasm' % name
+	if '--c3-strip' in sys.argv:
+		c3_wasm_strip(wasm)
+	return wasm
 
 def emcc_version(emcc):
 	ver = subprocess.check_output([emcc, '--version']).decode('utf-8')
@@ -453,7 +468,10 @@ def run_tests():
 
 		values = [len(open(f,'rb').read()) for f in wasms.values()]
 		fig, ax = plt.subplots()
-		ax.set_title(name)
+		if '--c3-strip' in sys.argv:
+			ax.set_title(name + ' c3 stripped: ,target_features+mutable-globals+sign-ext')
+		else:
+			ax.set_title(name)
 		ax.set_ylabel('wasm: bytes')
 		colors = ['cyan', 'cyan', 'orange', 'orange']
 		ax.bar(names, values, color=colors)
