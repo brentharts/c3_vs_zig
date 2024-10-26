@@ -126,10 +126,10 @@ def minifiy_wasm(wasm, name):
 	o = []
 	for ln in wat.splitlines():
 		print(ln)
-		#if ln.strip().startswith('(export "memory"'):
-		#	continue
-		if ln.strip().startswith('(export "__indirect_function_table"'):
-			ln = ln.replace("__indirect_function_table", "_$" )
+		if ln.strip().startswith('(export "memory"'):
+			ln = ln.replace('"memory"', '"$m"' )
+		elif ln.strip().startswith('(export "__indirect_function_table"'):
+			ln = ln.replace('"__indirect_function_table"', '"$t"' )
 		o.append(ln)
 
 	tmp = '/tmp/min.wat'
@@ -139,6 +139,11 @@ def minifiy_wasm(wasm, name):
 	print(cmd)
 	subprocess.check_call(cmd)
 	os.system('cp -v /tmp/tmp.wasm ' + wasm)
+
+def minifiy_js(js):
+	js = js.replace('.exports.memory.', '.exports._$m.')
+	js = js.replace('.exports.__indirect_function_table.', '.exports._$t.')
+	return js
 
 
 def c3_compile(c3, name='test-c3', info={}):
@@ -414,6 +419,10 @@ def gen_js_api(wasm, methods):
 	w = open(wasm+'.gz','rb').read()
 	b = base64.b64encode(w).decode('utf-8')
 
+	if '--mini-wasm' in sys.argv:
+		methods = methods.replace('.exports.memory.', '.exports.$m.')
+		methods = methods.replace('.exports.__indirect_function_table.', '.exports.$t.')
+
 	js = [
 		JS_API,
 		methods,
@@ -436,20 +445,26 @@ def run_tests():
 			wasms['zig']=wasm
 			overlays.append(t['zig'])
 
-			if os.path.isfile('/usr/bin/wasm-opt'):
-				opt = wasm.replace('.wasm', '.opt.wasm')
-				cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
-				print(cmd)
-				subprocess.check_call(cmd)
+			opt = wasm.replace('.wasm', '.opt.wasm')
+			cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
+			print(cmd)
+			subprocess.check_call(cmd)
 
-				if '--mini-wasm' in sys.argv:
-					minifiy_wasm(opt, name)
+			if '--mini-wasm' in sys.argv:
+				minifiy_wasm(opt, name)
 
-				overlays.append(None)
-				wasms['zig.wasm-opt'] = opt
+			overlays.append(None)
+			wasms['zig.wasm-opt'] = opt
+
+			cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
+			print(cmd)
+			subprocess.check_call(cmd)
+			overlays.append(None)
+			wasms['zig.wasm-opt.gz'] = opt + '.gz'
+
 
 			if 'JS' in t and '--test' in sys.argv:
-				test_wasm(wasm, t['JS'], title='zig - %s' % name)
+				test_wasm(opt, t['JS'], title='zig - %s' % name)
 
 
 		if 'c3' in t:
@@ -457,21 +472,26 @@ def run_tests():
 			wasms['c3']=wasm
 			overlays.append(t['c3'])
 
-			if os.path.isfile('/usr/bin/wasm-opt'):
-				opt = wasm.replace('.wasm', '.opt.wasm')
-				cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
-				print(cmd)
-				subprocess.check_call(cmd)
+			opt = wasm.replace('.wasm', '.opt.wasm')
+			cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
+			print(cmd)
+			subprocess.check_call(cmd)
 
-				if '--mini-wasm' in sys.argv:
-					minifiy_wasm(opt, name)
+			if '--mini-wasm' in sys.argv:
+				minifiy_wasm(opt, name)
 
-				overlays.append(None)
-				wasms['c3.wasm-opt'] = opt
+			overlays.append(None)
+			wasms['c3.wasm-opt'] = opt
+
+			cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
+			print(cmd)
+			subprocess.check_call(cmd)
+			overlays.append(None)
+			wasms['c3.wasm-opt.gz'] = opt + '.gz'
 
 
 			if 'JS' in t and '--test' in sys.argv:
-				test_wasm(wasm, t['JS'], title='c3 - %s' % name)
+				test_wasm(opt, t['JS'], title='c3 - %s' % name)
 
 
 		if 'c' in t and '--c' in sys.argv:
@@ -481,6 +501,9 @@ def run_tests():
 			if 'JS' in t and '--test-todo' in sys.argv:
 				## TODO: Uncaught (in promise) TypeError: import object field 'a' is not an Object 
 				test_wasm(wasm, t['JS'], title='c - %s' % name)
+
+			print(open(wasm,'rb').read())
+			break
 
 		if 'js' in t and '--js' in sys.argv:
 			tmp = '/tmp/%s.js' % name
@@ -498,8 +521,6 @@ def run_tests():
 					names.append('%s %s' %('emcc', info[k]))
 				else:
 					names.append('%s %s' %(k, info[k]))
-					print(k)
-					print(open(wasms[k],'rb').read())
 			else:
 				names.append(k)
 
@@ -510,7 +531,7 @@ def run_tests():
 		else:
 			ax.set_title(name)
 		ax.set_ylabel('wasm: bytes')
-		colors = ['cyan', 'cyan', 'orange', 'orange']
+		colors = ['cyan', 'cyan', 'cyan', 'orange', 'orange', 'orange']
 		ax.bar(names, values, color=colors)
 
 		for i,rect in enumerate(ax.patches):
@@ -551,6 +572,15 @@ def test_wasm(wasm, methods, title='test'):
 	open(out,'w').write('\n'.join(o))
 	webbrowser.open(out)
 
+HELP = '''
+options:
+	--c3-strip
+	--mini-wasm
+	--test
+
+'''
 
 if __name__=='__main__':
+	if '--help' in sys.argv:
+		print(HELP)
 	run_tests()
