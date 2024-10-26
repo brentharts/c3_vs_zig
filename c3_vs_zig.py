@@ -111,7 +111,34 @@ def c3_wasm_strip(wasm):
 	assert b.endswith(a)
 	c = b[:-len(a)]
 	print(c)
+	#d = b'__indirect_function_table'
+	#assert c.count(d)==1
+	#c = c.replace(d,b'_$tab') 
+	#wasm-opt, wasm-as parse exception: inline string contains NULL (0). that is technically valid in wasm, but you shouldn't do it, and it's not supported in binaryen
 	open(wasm,'wb').write(c)
+
+def minifiy_wasm(wasm, name):
+	tmp = '/tmp/dis.wat'
+	cmd = ['wasm-dis', '-o', tmp, wasm]
+	print(cmd)
+	subprocess.check_call(cmd)
+	wat = open(tmp).read()
+	o = []
+	for ln in wat.splitlines():
+		print(ln)
+		#if ln.strip().startswith('(export "memory"'):
+		#	continue
+		if ln.strip().startswith('(export "__indirect_function_table"'):
+			ln = ln.replace("__indirect_function_table", "_$" )
+		o.append(ln)
+
+	tmp = '/tmp/min.wat'
+	open(tmp,'w').write('\n'.join(o))
+
+	cmd = ['wasm-as', '-o', '/tmp/tmp.wasm', tmp]
+	print(cmd)
+	subprocess.check_call(cmd)
+	os.system('cp -v /tmp/tmp.wasm ' + wasm)
 
 
 def c3_compile(c3, name='test-c3', info={}):
@@ -295,12 +322,12 @@ extern fn void print_array(
 	int len
 	);
 
-float[%s] arr = {%s};
+const float[%s] ARR = {%s};
 
 fn void main() 
 	@extern("main") 
 	@wasm {
-	print_array(&arr, %s);
+	print_array(&ARR, %s);
 }
 		''' % (len(rand_floats), ','.join(rand_floats), len(rand_floats)),
 	},
@@ -327,12 +354,12 @@ extern fn void print_array(
 	int len
 	);
 
-float16[%s] arr = {%s};
+const float16[%s] ARR = {%s};
 
 fn void main() 
 	@extern("main") 
 	@wasm {
-	print_array(&arr, %s);
+	print_array(&ARR, %s);
 }
 		''' % (len(rand_floats), ','.join(rand_floats), len(rand_floats)),
 	}
@@ -414,6 +441,10 @@ def run_tests():
 				cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
 				print(cmd)
 				subprocess.check_call(cmd)
+
+				if '--mini-wasm' in sys.argv:
+					minifiy_wasm(opt, name)
+
 				overlays.append(None)
 				wasms['zig.wasm-opt'] = opt
 
@@ -431,6 +462,10 @@ def run_tests():
 				cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
 				print(cmd)
 				subprocess.check_call(cmd)
+
+				if '--mini-wasm' in sys.argv:
+					minifiy_wasm(opt, name)
+
 				overlays.append(None)
 				wasms['c3.wasm-opt'] = opt
 
@@ -463,6 +498,8 @@ def run_tests():
 					names.append('%s %s' %('emcc', info[k]))
 				else:
 					names.append('%s %s' %(k, info[k]))
+					print(k)
+					print(open(wasms[k],'rb').read())
 			else:
 				names.append(k)
 
