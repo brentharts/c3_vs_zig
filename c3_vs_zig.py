@@ -186,7 +186,7 @@ def c_compile(c, name='test-c', info={}):
 	cmd = [
 		EMCC, '-o', output, 
 		"-s","WASM=1",
-		'-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0',
+		#'-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0',
 		'-rdynamic',
 		'-Oz',
 		tmp
@@ -196,6 +196,40 @@ def c_compile(c, name='test-c', info={}):
 	return '/tmp/%s.wasm' % name
 
 rand_floats = [str(random()) for i in range(1024)]
+
+SIMPLE = {
+	'simple_export' : {
+		'zig' : '''
+
+export fn add(a:i32, b:i32) i32 {
+	return a+b;
+}
+
+		''',
+
+		'c3' : '''
+
+fn int add(int a, int b)
+  @extern("add") @wasm {
+	return a+b;
+}
+
+		''',
+
+		'c' : '''
+
+#include <emscripten.h>
+EMSCRIPTEN_KEEPALIVE
+int add(int a, int b) {
+	return a+b;
+}
+
+		''',
+
+
+	}
+}
+
 
 TESTS = {
 	'helloworld':{
@@ -433,10 +467,10 @@ def gen_js_api(wasm, methods):
 	]
 	return '\n'.join(js)
 
-def run_tests():
-	for name in TESTS:
+def run_tests( tests, use_gzip='--gzip' in sys.argv ):
+	for name in tests:
 		print('test:', name)
-		t = TESTS[name]
+		t = tests[name]
 		info = {}
 		wasms = {}
 		overlays = []
@@ -456,11 +490,12 @@ def run_tests():
 			overlays.append(None)
 			wasms['zig.wasm-opt'] = opt
 
-			cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
-			print(cmd)
-			subprocess.check_call(cmd)
-			overlays.append(None)
-			wasms['zig.wasm-opt.gz'] = opt + '.gz'
+			if use_gzip:
+				cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
+				print(cmd)
+				subprocess.check_call(cmd)
+				overlays.append(None)
+				wasms['zig.wasm-opt.gz'] = opt + '.gz'
 
 
 			if 'JS' in t and '--test' in sys.argv:
@@ -483,11 +518,12 @@ def run_tests():
 			overlays.append(None)
 			wasms['c3.wasm-opt'] = opt
 
-			cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
-			print(cmd)
-			subprocess.check_call(cmd)
-			overlays.append(None)
-			wasms['c3.wasm-opt.gz'] = opt + '.gz'
+			if use_gzip:
+				cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
+				print(cmd)
+				subprocess.check_call(cmd)
+				overlays.append(None)
+				wasms['c3.wasm-opt.gz'] = opt + '.gz'
 
 
 			if 'JS' in t and '--test' in sys.argv:
@@ -502,8 +538,8 @@ def run_tests():
 				## TODO: Uncaught (in promise) TypeError: import object field 'a' is not an Object 
 				test_wasm(wasm, t['JS'], title='c - %s' % name)
 
-			print(open(wasm,'rb').read())
-			break
+			#print(open(wasm,'rb').read())
+			#break
 
 		if 'js' in t and '--js' in sys.argv:
 			tmp = '/tmp/%s.js' % name
@@ -531,7 +567,10 @@ def run_tests():
 		else:
 			ax.set_title(name)
 		ax.set_ylabel('wasm: bytes')
-		colors = ['cyan', 'cyan', 'cyan', 'orange', 'orange', 'orange']
+		if use_gzip:
+			colors = ['cyan', 'cyan', 'cyan', 'orange', 'orange', 'orange', 'yellow']
+		else:
+			colors = ['cyan', 'cyan', 'orange', 'orange', 'yellow']
 		ax.bar(names, values, color=colors)
 
 		for i,rect in enumerate(ax.patches):
@@ -552,8 +591,6 @@ def run_tests():
 				ax.text(x, y, txt+'\n', fontsize=12)
 
 		plt.show()
-		if '--test-hello' in sys.argv:
-			break
 
 
 
@@ -577,10 +614,13 @@ options:
 	--c3-strip
 	--mini-wasm
 	--test
-
+	--all
 '''
 
 if __name__=='__main__':
 	if '--help' in sys.argv:
 		print(HELP)
-	run_tests()
+	if '--all' in sys.argv:
+		run_tests(TESTS)
+	else:
+		run_tests(SIMPLE)
