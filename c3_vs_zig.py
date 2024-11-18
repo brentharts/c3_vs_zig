@@ -6,6 +6,7 @@ from random import random
 _thisdir = os.path.split(os.path.abspath(__file__))[0]
 
 ZIG = os.path.join(_thisdir, 'zig-linux-x86_64-0.13.0/zig')
+ZIG14 = os.path.join(_thisdir, 'zig-linux-x86_64-0.14.0-dev.2253+3a6a8b8aa/zig')
 C3 = '/usr/local/bin/c3c'
 EMCC = 'emcc'
 
@@ -30,6 +31,16 @@ if not os.path.isfile(ZIG):
 	cmd = 'tar -xvf zig-linux-x86_64-0.13.0.tar.xz'
 	print(cmd)
 	subprocess.check_call(cmd.split())
+
+if not os.path.isfile(ZIG14) and islinux:
+	if not os.path.isfile('zig-linux-x86_64-0.14.0-dev.2253+3a6a8b8aa.tar.xz'):
+		cmd = 'wget -c https://ziglang.org/builds/zig-linux-x86_64-0.14.0-dev.2253+3a6a8b8aa.tar.xz'
+		print(cmd)
+		subprocess.check_call(cmd.split())
+	cmd = 'tar -xvf zig-linux-x86_64-0.14.0-dev.2253+3a6a8b8aa.tar.xz'
+	print(cmd)
+	subprocess.check_call(cmd.split())
+
 
 EMSDK = os.path.join(_thisdir, "emsdk")
 if "--install-emcc" in sys.argv and not os.path.isdir(EMSDK):
@@ -83,16 +94,16 @@ assert os.path.isfile(C3)
 print('c3c:', C3)
 
 
-def zig_compile(zig, name='test-zig', freestanding=True, info={}):
-	ver = subprocess.check_output([ZIG, 'version']).decode('utf-8').strip()
+def zig_compile(zig, name='test-zig', freestanding=True, info={}, zigc=ZIG):
+	ver = subprocess.check_output([zigc, 'version']).decode('utf-8').strip()
 	print('zig version:', ver)
-	info['zig'] = ver
+	info['zig'] = ver.split('+')[0]
 
 
 	tmp = '/tmp/%s.zig' % name
 	open(tmp,'w').write(zig)
 
-	cmd = [ZIG, 'build-exe']
+	cmd = [zigc, 'build-exe']
 	target = 'wasm32-wasi'
 	if freestanding:
 		target = 'wasm32-freestanding-musl'
@@ -128,14 +139,19 @@ def c3_wasm_strip(wasm):
 	a = b'\x00,\x0ftarget_features\x02+\x0fmutable-globals+\x08sign-ext'
 	b = open(wasm,'rb').read()
 	print(b)
-	assert b.endswith(a)
-	c = b[:-len(a)]
-	print(c)
-	#d = b'__indirect_function_table'
-	#assert c.count(d)==1
-	#c = c.replace(d,b'_$tab') 
-	#wasm-opt, wasm-as parse exception: inline string contains NULL (0). that is technically valid in wasm, but you shouldn't do it, and it's not supported in binaryen
-	open(wasm,'wb').write(c)
+	if b.endswith(a):
+		c = b[:-len(a)]
+		print(len(b), len(c))
+		print(c)
+		#d = b'__indirect_function_table'
+		#assert c.count(d)==1
+		#c = c.replace(d,b'_$tab') 
+		#wasm-opt, wasm-as parse exception: inline string contains NULL (0). that is technically valid in wasm, but you shouldn't do it, and it's not supported in binaryen
+		open(wasm.replace('.wasm', '.strip.wasm'),'wb').write(c)
+		return wasm.replace('.wasm', '.strip.wasm')
+	else:
+		print('no strip target_features+mutable-globals+sign-ext required')
+		return wasm
 
 def minifiy_wasm(wasm, name):
 	tmp = '/tmp/dis.wat'
@@ -184,8 +200,6 @@ def c3_compile(c3, name='test-c3', info={}):
 	print(cmd)
 	subprocess.check_call(cmd)
 	wasm = '/tmp/%s.wasm' % name
-	if '--c3-strip' in sys.argv:
-		c3_wasm_strip(wasm)
 	return wasm
 
 def emcc_version(emcc):
@@ -207,6 +221,7 @@ def c_compile(c, name='test-c', info={}):
 		EMCC, '-o', output, 
 		"-s","WASM=1",
 		#'-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0',
+		'-s', 'SIDE_MODULE=1',
 		'-rdynamic',
 		'-Oz',
 		tmp
@@ -251,8 +266,7 @@ int add(int a, int b) {
 	}
 }
 
-
-TESTS = {
+HELLO_WORLD = {
 	'helloworld':{
 		'zig': '''
 extern fn printn(
@@ -300,7 +314,11 @@ printn(ptr, len){
 		'''
 
 
-	},
+	}
+	
+}
+
+TESTS = {
 
 	## test 2 ##
 	'embed float32 array 8' : {
@@ -496,7 +514,7 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 		wasms = {}
 		overlays = []
 		if 'zig' in t:
-			wasm = zig_compile(t['zig'], info=info)
+			wasm = zig_compile(t['zig'], info=info, zigc=ZIG)
 			wasms['zig']=wasm
 			overlays.append(t['zig'])
 
@@ -521,6 +539,36 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 				overlays.append(None)
 
 			wasms['zig.wasm-opt'] = opt
+
+			if os.path.isfile(ZIG14):
+				zinfo = {}
+				wasm = zig_compile(t['zig'], name='test_zig14', info=zinfo, zigc=ZIG14)
+				wasms['zig14']=wasm
+				info['zig14']=zinfo['zig']
+				overlays.append(t['zig'])
+
+				opt = wasm.replace('.wasm', '.opt.wasm')
+				cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
+				print(cmd)
+				subprocess.check_call(cmd)
+
+				if '--mini-wasm' in sys.argv:
+					minifiy_wasm(opt, name)
+
+				if os.path.isfile(WASM_OBJDUMP):
+					cmd = [WASM_OBJDUMP, '--syms', opt]
+					print(cmd)
+					subprocess.check_call(cmd)
+
+					cmd = [WASM_OBJDUMP, '-D', opt]
+					print(cmd)
+					dis = subprocess.check_output(cmd).decode('utf-8')
+					overlays.append(dis)
+				else:
+					overlays.append(None)
+
+				wasms['zig14.wasm-opt'] = opt
+
 
 			if use_gzip:
 				cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
@@ -560,6 +608,20 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 				overlays.append(None)
 
 			wasms['c3.wasm-opt'] = opt
+
+			opt_strip = c3_wasm_strip(wasm)
+			cmd = ['wasm-opt', '-o', opt_strip, '-Oz', opt_strip]
+			print(cmd)
+			subprocess.check_call(cmd)
+			wasms['c3.opt.strip'] = opt_strip
+			if os.path.isfile(WASM_OBJDUMP):
+				cmd = [WASM_OBJDUMP, '-D', opt_strip]
+				print(cmd)
+				dis = subprocess.check_output(cmd).decode('utf-8')
+				overlays.append(dis)
+			else:
+				overlays.append(None)
+
 
 			if use_gzip:
 				cmd = ['gzip', '--keep', '--force', '--verbose', '--best', opt]
@@ -628,18 +690,21 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 			ax.set_title(name)
 		ax.set_ylabel('wasm: bytes')
 		if use_gzip:
-			colors = ['cyan', 'cyan', 'cyan', 'orange', 'orange', 'orange', 'yellow', 'yellow']
+			colors = ['cyan', 'cyan', 'cyan', 'orange', 'orange', 'orange','orange', 'yellow', 'yellow']
 		else:
-			colors = ['cyan', 'cyan', 'orange', 'orange', 'yellow', 'yellow']
+			colors = ['cyan', 'cyan', 'orange', 'orange','orange', 'yellow', 'yellow']
+		if os.path.isfile(ZIG14):
+			colors = ['cyan', 'cyan'] + colors
 		ax.bar(names, values, color=colors)
 
 		for i,rect in enumerate(ax.patches):
 			x = rect.get_x()
-			ax.text(x, rect.get_height(), '%s bytes' % values[i], fontsize=10)
+			ax.text(x-(rect.get_width()/4), rect.get_height(), '%s bytes' % values[i], fontsize=7)
 
 			if not overlays[i]:
 				continue
-			y = rect.get_y() + (rect.get_height()/3)
+			#y = rect.get_y() + (rect.get_height()/3)
+			y = rect.get_y() + (rect.get_height()/2)
 			txt = overlays[i].strip().replace('\t', '  ')
 			if txt:
 				tx = []
@@ -652,7 +717,7 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 				if len(lines) > 20:
 					ax.text(x, rect.get_y(), txt+'\n', fontsize=5)
 				else:
-					ax.text(x, y, txt+'\n', fontsize=12)
+					ax.text(x, y, txt+'\n', fontsize=8)
 
 		plt.show()
 
@@ -675,7 +740,6 @@ def test_wasm(wasm, methods, title='test'):
 
 HELP = '''
 options:
-	--c3-strip
 	--mini-wasm
 	--use-system-emcc
 	--install-emcc
@@ -690,4 +754,7 @@ if __name__=='__main__':
 	if '--all' in sys.argv:
 		run_tests(TESTS)
 	else:
-		run_tests(SIMPLE)
+		if '--simple' in sys.argv:
+			run_tests(SIMPLE)
+		else:
+			run_tests(HELLO_WORLD)
