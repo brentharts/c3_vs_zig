@@ -9,6 +9,7 @@ ZIG = os.path.join(_thisdir, 'zig-linux-x86_64-0.13.0/zig')
 C3 = '/usr/local/bin/c3c'
 EMCC = 'emcc'
 
+
 islinux=iswindows=isapple=c3gz=c3zip=None
 if sys.platform == 'win32':
 	c3zip = 'https://github.com/c3lang/c3c/releases/download/latest/c3-windows.zip'
@@ -29,6 +30,25 @@ if not os.path.isfile(ZIG):
 	cmd = 'tar -xvf zig-linux-x86_64-0.13.0.tar.xz'
 	print(cmd)
 	subprocess.check_call(cmd.split())
+
+EMSDK = os.path.join(_thisdir, "emsdk")
+if "--install-emcc" in sys.argv and not os.path.isdir(EMSDK):
+	cmd = [
+		"git","clone","--depth","1",
+		"https://github.com/emscripten-core/emsdk.git",
+	]
+	print(cmd)
+	subprocess.check_call(cmd)
+	emsdk_update()
+
+WASM_OBJDUMP = '/usr/bin/llvm-objdump'
+if os.path.isdir(EMSDK) and not '--use-system-emcc' in sys.argv:
+	if iswindows:
+		EMCC = os.path.join(EMSDK, "upstream/emscripten/emcc.exe")
+		WASM_OBJDUMP = os.path.join(EMSDK, "upstream/bin/llvm-objdump.exe")
+	else:
+		EMCC = os.path.join(EMSDK, "upstream/emscripten/emcc")
+		WASM_OBJDUMP = os.path.join(EMSDK, "upstream/bin/llvm-objdump")
 
 
 if not os.path.isfile(C3):
@@ -201,7 +221,8 @@ SIMPLE = {
 	'simple_export' : {
 		'zig' : '''
 
-export fn add(a:i32, b:i32) i32 {
+export
+fn add(a:i32, b:i32) i32 {
 	return a+b;
 }
 
@@ -487,7 +508,18 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 			if '--mini-wasm' in sys.argv:
 				minifiy_wasm(opt, name)
 
-			overlays.append(None)
+			if os.path.isfile(WASM_OBJDUMP):
+				cmd = [WASM_OBJDUMP, '--syms', opt]
+				print(cmd)
+				subprocess.check_call(cmd)
+
+				cmd = [WASM_OBJDUMP, '-D', opt]
+				print(cmd)
+				dis = subprocess.check_output(cmd).decode('utf-8')
+				overlays.append(dis)
+			else:
+				overlays.append(None)
+
 			wasms['zig.wasm-opt'] = opt
 
 			if use_gzip:
@@ -515,7 +547,18 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 			if '--mini-wasm' in sys.argv:
 				minifiy_wasm(opt, name)
 
-			overlays.append(None)
+			if os.path.isfile(WASM_OBJDUMP):
+				cmd = [WASM_OBJDUMP, '--syms', opt]
+				print(cmd)
+				subprocess.check_call(cmd)
+
+				cmd = [WASM_OBJDUMP, '-D', opt]
+				print(cmd)
+				dis = subprocess.check_output(cmd).decode('utf-8')
+				overlays.append(dis)
+			else:
+				overlays.append(None)
+
 			wasms['c3.wasm-opt'] = opt
 
 			if use_gzip:
@@ -538,8 +581,25 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 				## TODO: Uncaught (in promise) TypeError: import object field 'a' is not an Object 
 				test_wasm(wasm, t['JS'], title='c - %s' % name)
 
-			#print(open(wasm,'rb').read())
-			#break
+			opt = wasm.replace('.wasm', '.opt.wasm')
+			cmd = ['wasm-opt', '-o', opt, '-Oz', wasm]
+			print(cmd)
+			subprocess.check_call(cmd)
+
+			wasms['emcc.wasm-opt'] = opt
+
+			if os.path.isfile(WASM_OBJDUMP):
+				cmd = [WASM_OBJDUMP, '--syms', opt]
+				print(cmd)
+				subprocess.check_call(cmd)
+
+				cmd = [WASM_OBJDUMP, '-D', opt]
+				print(cmd)
+				dis = subprocess.check_output(cmd).decode('utf-8')
+				overlays.append(dis)
+			else:
+				overlays.append(None)
+
 
 		if 'js' in t and '--js' in sys.argv:
 			tmp = '/tmp/%s.js' % name
@@ -568,9 +628,9 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 			ax.set_title(name)
 		ax.set_ylabel('wasm: bytes')
 		if use_gzip:
-			colors = ['cyan', 'cyan', 'cyan', 'orange', 'orange', 'orange', 'yellow']
+			colors = ['cyan', 'cyan', 'cyan', 'orange', 'orange', 'orange', 'yellow', 'yellow']
 		else:
-			colors = ['cyan', 'cyan', 'orange', 'orange', 'yellow']
+			colors = ['cyan', 'cyan', 'orange', 'orange', 'yellow', 'yellow']
 		ax.bar(names, values, color=colors)
 
 		for i,rect in enumerate(ax.patches):
@@ -583,12 +643,16 @@ def run_tests( tests, use_gzip='--gzip' in sys.argv ):
 			txt = overlays[i].strip().replace('\t', '  ')
 			if txt:
 				tx = []
-				for ln in txt.splitlines():
+				lines = txt.splitlines()
+				for ln in lines:
 					if len(ln) > 50:
 						ln = ln[:45] + '...'
 					tx.append(ln)
 				txt = '\n'.join(tx)
-				ax.text(x, y, txt+'\n', fontsize=12)
+				if len(lines) > 20:
+					ax.text(x, rect.get_y(), txt+'\n', fontsize=5)
+				else:
+					ax.text(x, y, txt+'\n', fontsize=12)
 
 		plt.show()
 
@@ -613,6 +677,9 @@ HELP = '''
 options:
 	--c3-strip
 	--mini-wasm
+	--use-system-emcc
+	--install-emcc
+	--c
 	--test
 	--all
 '''
